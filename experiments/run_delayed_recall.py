@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 
 from rgsn.config import GraphConfig, NeuronConfig
-from rgsn.decoding import PopulationRateDecoder
+from rgsn.decoding import LinearReadoutDecoder, PopulationRateDecoder
 from rgsn.delayed_recall import (
     MemorylessClassifier,
     RecallTaskSpec,
@@ -45,6 +45,8 @@ def train_rgsn(
     n_train,
     n_test,
     batch_size,
+    decoder_scheme: str = "population_rate",
+    return_model: bool = False,
 ):
     gen = seed_everything(seed)
     gcfg = GraphConfig(
@@ -53,7 +55,10 @@ def train_rgsn(
     ncfg = NeuronConfig(tau_mem_ms=20.0, dt_ms=1.0, v_th=1.0, surrogate_slope=1.0)
     graph_spec = build_graph(gcfg, gen)
     net = RandomGraphSNN(graph_spec, ncfg, n_features=spec.n_features, gain=gcfg.gain, seed=seed)
-    decoder = PopulationRateDecoder(graph_spec.output_idx, learnable_temperature=True)
+    if decoder_scheme == "linear_readout":
+        decoder = LinearReadoutDecoder(net.n, N_CLASSES)
+    else:
+        decoder = PopulationRateDecoder(graph_spec.output_idx, learnable_temperature=True)
     params = list(net.parameters()) + list(decoder.parameters())
     opt = torch.optim.Adam(params, lr=lr)
     loss_fn = nn.CrossEntropyLoss()
@@ -80,6 +85,8 @@ def train_rgsn(
         run_epoch(train_loader, train=True)
     test_acc, _ = run_epoch(test_loader, train=False)
     param_count = sum(p.numel() for p in params if p.requires_grad)
+    if return_model:
+        return test_acc, param_count, net, decoder, test_loader
     return test_acc, param_count
 
 
@@ -167,6 +174,28 @@ def main():
             )
             rows.append(
                 {"model": "rgsn", "delay": delay, "seed": seed, "test_acc": acc, "params": params}
+            )
+            print(rows[-1], f"t={time.time() - t0:.0f}s")
+
+            acc, params = train_rgsn(
+                spec,
+                seed,
+                args.epochs,
+                lr=0.01,
+                grad_clip=5.0,
+                n_train=args.n_train,
+                n_test=args.n_test,
+                batch_size=args.batch_size,
+                decoder_scheme="linear_readout",
+            )
+            rows.append(
+                {
+                    "model": "rgsn_linear_readout",
+                    "delay": delay,
+                    "seed": seed,
+                    "test_acc": acc,
+                    "params": params,
+                }
             )
             print(rows[-1], f"t={time.time() - t0:.0f}s")
 

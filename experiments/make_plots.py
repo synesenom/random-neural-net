@@ -26,12 +26,14 @@ MODEL_COLORS = {
 }
 
 RECALL_LABELS = {
-    "rgsn": "RGSN (online, recurrent)",
+    "rgsn": "RGSN, population-rate readout",
+    "rgsn_linear_readout": "RGSN, trained linear readout",
     "memoryless_mlp": "Memoryless MLP (online, no history)",
     "windowed_mlp": "Windowed MLP (offline, full sequence)",
 }
 RECALL_COLORS = {
     "rgsn": "#1b9e77",
+    "rgsn_linear_readout": "#66c2a5",
     "memoryless_mlp": "#d95f02",
     "windowed_mlp": "#7570b3",
 }
