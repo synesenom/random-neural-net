@@ -57,6 +57,8 @@ class Model:
             if self.kind == "reservoir":
                 self.net.W_mag.requires_grad_(False)
                 self.net.W_in.requires_grad_(False)
+
+            if cfg.decoding.scheme == "linear_readout":
                 self.decoder = LinearReadoutDecoder(self.net.n, cfg.graph.n_classes)
             else:
                 self.decoder = PopulationRateDecoder(

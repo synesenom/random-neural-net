@@ -51,6 +51,9 @@ def main():
                     raw["train"]["epochs"] = args.epochs
                 if model == "mlp":
                     raw["train"]["lr"] = 0.001  # MLP is far better conditioned; same epoch budget.
+                if model == "reservoir":
+                    # PLAN.md 5.3: fixed reservoir + trained *linear* readout, not population code.
+                    raw["decoding"] = {**base["decoding"], "scheme": "linear_readout"}
                 raw["name"] = f"{model}_n{n_train}_s{seed}"
                 cfg = dataclass_from_dict(RunConfig, raw)
                 run_dir = out_root / raw["name"]
