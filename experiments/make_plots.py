@@ -166,11 +166,66 @@ def plot_delayed_recall(recall_csv: Path, out_dir: Path):
     plt.close(fig)
 
 
+def plot_shrink(shrink_csv: Path, out_dir: Path):
+    df = pd.read_csv(shrink_csv)
+    rgsn = df[df.model == "rgsn"]
+    agg = rgsn.groupby("n")[["test_acc", "params", "train_time_s"]].agg(["mean", "std"])
+    mlp = df[df.model == "windowed_mlp"]
+    mlp_acc, mlp_params, mlp_time = (
+        mlp.test_acc.mean(),
+        mlp.params.mean(),
+        mlp.train_time_s.mean(),
+    )
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+
+    ax = axes[0]
+    ax.errorbar(
+        agg.index,
+        agg[("test_acc", "mean")],
+        yerr=agg[("test_acc", "std")].fillna(0),
+        marker="o",
+        color="#1b9e77",
+        label="RGSN",
+    )
+    ax.axhline(mlp_acc, color="#7570b3", linestyle="--", label="Windowed MLP")
+    ax.axhline(0.5, color="gray", linestyle=":", linewidth=1, label="chance")
+    ax.set_xlabel("N (neurons)")
+    ax.set_ylabel("Test accuracy")
+    ax.set_title("Accuracy vs. network size (delay=20)")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+
+    ax = axes[1]
+    ax.plot(agg.index, agg[("params", "mean")], marker="o", color="#1b9e77", label="RGSN")
+    ax.axhline(mlp_params, color="#7570b3", linestyle="--", label="Windowed MLP")
+    ax.set_xlabel("N (neurons)")
+    ax.set_ylabel("Trainable parameters")
+    ax.set_yscale("log")
+    ax.set_title("Parameter count vs. network size")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+
+    ax = axes[2]
+    ax.plot(agg.index, agg[("train_time_s", "mean")], marker="o", color="#1b9e77", label="RGSN")
+    ax.axhline(mlp_time, color="#7570b3", linestyle="--", label="Windowed MLP")
+    ax.set_xlabel("N (neurons)")
+    ax.set_ylabel("Training wall-clock time (s)")
+    ax.set_title("Training cost vs. network size")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out_dir / "shrink_delayed_recall.png", dpi=150)
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--h1-root", default="runs/h1_sample_efficiency")
     parser.add_argument("--h3-csv", default="runs/h3_ablation/summary.csv")
     parser.add_argument("--recall-csv", default="runs/delayed_recall/summary.csv")
+    parser.add_argument("--shrink-csv", default="runs/shrink_delayed_recall/summary.csv")
     parser.add_argument("--out-dir", default="runs/plots")
     parser.add_argument("--learning-speed-n", type=int, default=4000)
     parser.add_argument("--learning-speed-seed", type=int, default=0)
@@ -192,6 +247,10 @@ def main():
     recall_csv = Path(args.recall_csv)
     if recall_csv.exists():
         plot_delayed_recall(recall_csv, out_dir)
+
+    shrink_csv = Path(args.shrink_csv)
+    if shrink_csv.exists():
+        plot_shrink(shrink_csv, out_dir)
 
     print(f"Plots written to {out_dir}")
 

@@ -54,6 +54,7 @@ python -m rgsn.train --config configs/rgsn_mnist.yaml   # one training run
 python experiments/run_sample_efficiency.py    # H1 + H2 data
 python experiments/run_ablation.py             # H3 data (needs H1's checkpoints first)
 python experiments/run_delayed_recall.py       # delayed-recall / H4 data (independent of the above)
+python experiments/run_shrink_delayed_recall.py  # network-size sweep at delay=20 (needs run_delayed_recall's finding as context, not its output)
 python experiments/make_plots.py               # renders runs/plots/*.png from the CSVs
 ```
 
@@ -172,26 +173,85 @@ A binary value is shown for 5 steps, then `delay` steps of silence, then a
 processing one timestep at a time, with no access to earlier input beyond
 what its own state carries forward. Test accuracy, mean over 3 seeds:
 
-| Delay (steps) | RGSN (online, recurrent) | Memoryless MLP (online) | Windowed MLP (offline, full sequence) |
-|---|---|---|---|
-| 0 | 97.3% | 50.1% | 97.1% |
-| 10 | 97.0% | 50.1% | 97.4% |
-| 20 (~1 membrane tau) | 96.0% | 50.1% | 96.9% |
-| 40 (~2 tau) | 65.9% (+/-24%) | 50.1% | 96.9% |
-| 80 (~4 tau) | 59.7% (+/-16%) | 50.1% | 96.6% |
+| Delay (steps) | RGSN, population-rate readout | RGSN, trained linear readout | Memoryless MLP (online) | Windowed MLP (offline, full sequence) |
+|---|---|---|---|---|
+| 0 | 97.3% | 96.8% | 50.1% | 97.1% |
+| 10 | 97.0% | 97.0% | 50.1% | 97.4% |
+| 20 (~1 membrane tau) | 96.0% | 97.6% | 50.1% | 96.9% |
+| 40 (~2 tau) | 65.9% (+/-24%) | **96.1% (+/-1.2%)** | 50.1% | 96.9% |
+| 80 (~4 tau) | 59.7% (+/-16%) | **78.7% (+/-1.7%)** | 50.1% | 96.6% |
 
 The memoryless MLP is pinned at exactly chance for every delay *by
 construction*: at query time its only visible input (the go pulse) is
 statistically identical for both classes, so no amount of training can move
 it off chance. RGSN, with no explicit buffer, matches the windowed MLP
 (which is handed the entire sequence at once) almost exactly for delays up
-to about one membrane time constant (tau_mem=20 steps here), then degrades
-and becomes unreliable (high seed-to-seed variance) beyond ~2 tau — a
-believable capacity limit of passive leaky-membrane memory, not a training
-failure. This is a genuine structural capability gap: RGSN has a real,
+to about one membrane time constant (tau_mem=20 steps here), then the plain
+population-rate readout degrades and becomes unreliable (huge seed-to-seed
+variance) beyond ~2 tau.
+
+That degradation is **not** passive membrane decay: directly inspecting
+firing rates during the delay window shows sustained (even rising)
+population activity all the way through, for every seed — the recurrent
+connectivity (`gain=4.0`) keeps the network in a self-exciting regime well
+past tau_mem, so information isn't simply leaking away. Inspecting the 16
+neurons the population-rate decoder actually reads shows why it still
+fails: their class-discriminative signal persists through the delay but
+its sign/direction drifts, especially once the "go" pulse perturbs the
+ongoing reverberation, and the population-rate decoder — a fixed,
+unweighted average of a small, static neuron subset — can't adapt to that
+drift. Swapping in a trained linear readout over all N neurons (same
+network, same recurrent dynamics, only the readout differs) recovers
+96.1% (+/-1.2%) at delay=40 and 78.7% (+/-1.7%) at delay=80, both far more
+accurate *and* far more consistent across seeds than the population code.
+So there is a real, later capacity limit (delay=80 still degrades even
+with the better readout), but it is set by what the recurrent dynamics can
+still represent, not by tau_mem, and PLAN.md's population-code readout
+was leaving a large amount of that capacity on the table. This is a
+genuine structural capability gap either way: RGSN has a real,
 non-tunable source of memory that a stateless feedforward net cannot have
 regardless of training, in the specific (but common) setting of bounded
 per-step online processing without an external history buffer.
+
+### Shrinking the network
+
+Given RGSN matches the windowed MLP's accuracy at delay=20, how small can
+it be made, and is it actually cheaper to train at that size? Sweeping N
+down (density and output-group size scaled with N to keep the graph
+connected and the readout viable), against the windowed MLP baseline
+(96.9% accuracy, 2018 params, 0.52s to train):
+
+| N | test acc | params | train time | vs. MLP params | vs. MLP time |
+|---|---|---|---|---|---|
+| 150 | 97.1% | 22,801 | 8.77s | 11.3x more | 17.0x slower |
+| 50 | 97.2% | 2,601 | 5.10s | 1.3x more | 9.9x slower |
+| 30 | 95.8% | 961 | 4.43s | **0.48x (fewer)** | 8.6x slower |
+| 20 | 82.3% (+/-27%, 1/3 seeds failed) | 441 | 4.39s | 0.22x | 8.5x slower |
+| 12 | 66.1% (+/-25%, 2/3 seeds failed) | 169 | 4.02s | 0.08x | 7.8x slower |
+| windowed MLP | 96.9% | 2,018 | 0.52s | — | — |
+
+**Parameters: RGSN can be smaller.** It stays reliably comparable to the
+MLP down to about N=30 — **961 trainable parameters, under half the MLP's
+2018** — with all 3 seeds landing in the 93-98% range. Below N~20 it
+becomes unreliable: some seeds simply fail to find a working solution
+(the same kind of bimodal collapse seen with long delays, here from too
+little capacity rather than too much delay), so N=30 is a safer "minimum
+comparable size" than the raw mean at N=15-20 suggests.
+
+**Training cost: it does not get cheaper — RGSN is consistently 8-17x
+*slower* to train than the windowed MLP, and shrinking the network barely
+helps.** Training time only drops from 8.77s (N=150) to ~4.0-4.4s at every
+N from 30 down to 12, essentially flooring out. That's because the cost is
+dominated by the T=30 *sequential* timesteps of BPTT unrolling (`for t in
+range(t_steps)` in `network.py`), not by the O(N^2) matrix multiply per
+step — at these small N the per-step compute is trivial, so wall-clock
+time is mostly interpreter/kernel-launch overhead repeated 30 times per
+batch, which a smaller matrix does nothing to reduce. The windowed MLP
+does one feedforward pass per batch, no unrolling. This is a fair
+criticism of the simulator as implemented (a vectorized/fused recurrent
+kernel or GPU execution would shrink this overhead substantially) rather
+than a fundamental FLOPs-level limit, but as built, fewer parameters does
+not mean faster training for this architecture.
 
 ## Scope and deviations from PLAN.md
 
