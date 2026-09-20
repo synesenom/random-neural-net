@@ -25,6 +25,17 @@ MODEL_COLORS = {
     "mlp": "#d95f02",
 }
 
+RECALL_LABELS = {
+    "rgsn": "RGSN (online, recurrent)",
+    "memoryless_mlp": "Memoryless MLP (online, no history)",
+    "windowed_mlp": "Windowed MLP (offline, full sequence)",
+}
+RECALL_COLORS = {
+    "rgsn": "#1b9e77",
+    "memoryless_mlp": "#d95f02",
+    "windowed_mlp": "#7570b3",
+}
+
 
 def plot_sample_efficiency(summary_csv: Path, out_dir: Path):
     df = pd.read_csv(summary_csv)
@@ -125,10 +136,39 @@ def plot_ablation(ablation_csv: Path, out_dir: Path):
         plt.close(fig)
 
 
+def plot_delayed_recall(recall_csv: Path, out_dir: Path):
+    df = pd.read_csv(recall_csv)
+    agg = df.groupby(["model", "delay"])["test_acc"].agg(["mean", "std"]).reset_index()
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    for model in RECALL_LABELS:
+        sub = agg[agg.model == model].sort_values("delay")
+        if sub.empty:
+            continue
+        ax.errorbar(
+            sub.delay,
+            sub["mean"],
+            yerr=sub["std"].fillna(0),
+            marker="o",
+            label=RECALL_LABELS[model],
+            color=RECALL_COLORS[model],
+        )
+    ax.axhline(0.5, color="gray", linestyle="--", linewidth=1, label="chance")
+    ax.set_xlabel("Delay between cue and query (timesteps)")
+    ax.set_ylabel("Test accuracy")
+    ax.set_title("Delayed recall: online memory vs. delay length")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    ax.set_ylim(0.4, 1.02)
+    fig.tight_layout()
+    fig.savefig(out_dir / "delayed_recall.png", dpi=150)
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--h1-root", default="runs/h1_sample_efficiency")
     parser.add_argument("--h3-csv", default="runs/h3_ablation/summary.csv")
+    parser.add_argument("--recall-csv", default="runs/delayed_recall/summary.csv")
     parser.add_argument("--out-dir", default="runs/plots")
     parser.add_argument("--learning-speed-n", type=int, default=4000)
     parser.add_argument("--learning-speed-seed", type=int, default=0)
@@ -146,6 +186,10 @@ def main():
     h3_csv = Path(args.h3_csv)
     if h3_csv.exists():
         plot_ablation(h3_csv, out_dir)
+
+    recall_csv = Path(args.recall_csv)
+    if recall_csv.exists():
+        plot_delayed_recall(recall_csv, out_dir)
 
     print(f"Plots written to {out_dir}")
 

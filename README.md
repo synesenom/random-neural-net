@@ -3,7 +3,18 @@
 Implementation of [PLAN.md](PLAN.md): a sparse random directed graph of
 leaky-integrate-and-fire (LIF) spiking neurons, with population-coded I/O and
 DEEP-R-style structural plasticity (prune + regrow), evaluated against
-parameter-matched baselines on MNIST.
+parameter-matched baselines on MNIST, plus a synthetic online delayed-recall
+task designed to test PLAN.md's H4 (temporal) hypothesis directly.
+
+**Headline result**: RGSN loses badly to a parameter-matched MLP on static
+MNIST classification (as PLAN.md's own "expectation check" predicts), but
+wins decisively on **online temporal memory**: on a task where a value must
+be reported some delay after it was shown, processing one timestep at a
+time with no external buffer, a memoryless MLP is mathematically capped at
+chance accuracy for *any* delay, while RGSN's recurrent spiking state
+solves it (~96-97%, matching an MLP given the whole sequence at once) for
+delays up to about one membrane time constant, degrading gracefully beyond
+that. See "Delayed recall" under Results.
 
 ## Status
 
@@ -22,7 +33,7 @@ deviations from PLAN.md" below.
 | 5 — Rewiring (DEEP-R) | Done |
 | 6 — Baselines (MLP, reservoir, RGSN-no-rewire) | Done |
 | 7 — Experiments (H1/H2/H3) | Done (MNIST only) |
-| 8 — Stretch (delays, e-prop, SHD/H4, topology analysis) | Not implemented |
+| 8 — Stretch (delays, e-prop, SHD/H4, topology analysis) | Partial: H4 tested via a custom synthetic delayed-recall task (`rgsn.delayed_recall`) instead of SHD; no synaptic delays, e-prop, or topology analysis |
 
 ## Repo layout
 
@@ -39,9 +50,10 @@ pytest tests/ -q -m slow                             # + end-to-end training smo
 python -m rgsn.train --config configs/rgsn_mnist.yaml --dry-run
 python -m rgsn.train --config configs/rgsn_mnist.yaml   # one training run
 
-# Full experiment suite (takes ~XX minutes on CPU):
+# Full experiment suite (~15-20 min total on a 4-core CPU):
 python experiments/run_sample_efficiency.py    # H1 + H2 data
-python experiments/run_ablation.py             # H3 data
+python experiments/run_ablation.py             # H3 data (needs H1's checkpoints first)
+python experiments/run_delayed_recall.py       # delayed-recall / H4 data (independent of the above)
 python experiments/make_plots.py               # renders runs/plots/*.png from the CSVs
 ```
 
@@ -86,15 +98,100 @@ the spiking models) the same graph/neuron hyperparameters:
 
 ## Results
 
-*(filled in from `runs/h1_sample_efficiency/summary.csv` and
-`runs/h3_ablation/summary.csv` after the experiment suite finishes — see
-`runs/plots/*.png`.)*
+Generated from `runs/h1_sample_efficiency/summary.csv`,
+`runs/h3_ablation/summary.csv`, and `runs/delayed_recall/summary.csv`
+(gitignored; regenerate with the Quickstart commands). Plots: `runs/plots/*.png`.
 
-### H1 — Sample efficiency
+### H1 — Sample efficiency (MNIST, test accuracy, mean over 3 seeds)
 
-### H2 — Learning speed
+| Model | n=200 | n=500 | n=1000 | n=2000 | n=4000 |
+|---|---|---|---|---|---|
+| MLP (param-matched) | 73.1% | 86.7% | 89.0% | 90.5% | **92.0%** |
+| Fixed reservoir + linear readout | 25.6% | 35.9% | 40.0% | 44.4% | 49.5% |
+| RGSN, no rewiring | 20.0% | 22.9% | 27.6% | 38.6% | 44.0% |
+| RGSN, full (+ rewiring) | 13.6% | 24.7% | 28.0% | 36.4% | 41.4% |
+
+The MLP dominates at every training-set size, matching PLAN.md's own
+expectation. More surprising: the *frozen* reservoir with a trained linear
+readout beats *both* trained RGSN variants (which use the population-code
+readout) at every size, and rewiring doesn't measurably help over
+`rgsn_no_rewire`. See "Update rule vs. output encoding" below for why.
+
+### H2 — Learning speed (n_train=4000, seed 0)
+
+MLP reaches 82.8% after a single epoch (7.2s total wall-clock for 15
+epochs). The spiking models take 33-57s for the same 15 epochs (BPTT
+through T=30 steps is the bottleneck) to reach 41-53%.
 
 ### H3 — Robustness to ablation
+
+Fraction of each model's own *starting* accuracy retained at 50%
+hidden-unit / edge / output-neuron ablation:
+
+| Model | hidden | edge | output |
+|---|---|---|---|
+| MLP (hidden-unit ablation) | **84%** | - | - |
+| Fixed reservoir | 71% | 68% | 79% |
+| RGSN, no rewiring | 37% | 33% | 43% |
+| RGSN, full | 50% | 28% | 62% |
+
+This is a negative result relative to the original "population coding
+degrades gracefully" hypothesis: the MLP degrades *more* gracefully in
+relative terms, and starts from a much higher absolute accuracy, so it wins
+outright. Likely cause: the MLP's hidden layer is densely connected to all
+784 inputs and all 10 outputs (large redundancy), whereas RGSN's sparse
+graph (avg out-degree ~=24) and small output groups (k=8 neurons/class)
+have far less slack to absorb random damage.
+
+### Update rule vs. output encoding
+
+H1's odd ordering (frozen reservoir + linear readout beating trained RGSN +
+population code) prompted a direct 2x2 factorial: {frozen, trained} weights
+x {population-rate, dense linear} readout, n_train=4000, 15 epochs:
+
+| | population-rate decoder | linear readout (all 300 neurons) |
+|---|---|---|
+| **frozen weights** | 10.2% (~chance) | 45.7% |
+| **trained weights** | 41.6% | 76.1% |
+
+Both factors matter about equally and combine **additively** (10.2 + 35.5
++ 31.4 ~= 77.1 ~= the actual 76.1, i.e. no strong interaction):
+switching the decoder is worth +34-36 points regardless of whether the
+weights are trained; switching from frozen to trained weights is worth
++30-31 points regardless of decoder. The extreme case is the most telling:
+frozen weights + population decoder is barely above chance, because in
+that configuration the *only* trainable parameter is the decoder's single
+temperature scalar. Population coding's small, fixed-membership output
+groups are a real capacity bottleneck that weight training alone only
+partly compensates for.
+
+### Delayed recall (online temporal memory — a targeted test of H4)
+
+A binary value is shown for 5 steps, then `delay` steps of silence, then a
+"go" pulse for 5 steps during which the model must report the value —
+processing one timestep at a time, with no access to earlier input beyond
+what its own state carries forward. Test accuracy, mean over 3 seeds:
+
+| Delay (steps) | RGSN (online, recurrent) | Memoryless MLP (online) | Windowed MLP (offline, full sequence) |
+|---|---|---|---|
+| 0 | 97.3% | 50.1% | 97.1% |
+| 10 | 97.0% | 50.1% | 97.4% |
+| 20 (~1 membrane tau) | 96.0% | 50.1% | 96.9% |
+| 40 (~2 tau) | 65.9% (+/-24%) | 50.1% | 96.9% |
+| 80 (~4 tau) | 59.7% (+/-16%) | 50.1% | 96.6% |
+
+The memoryless MLP is pinned at exactly chance for every delay *by
+construction*: at query time its only visible input (the go pulse) is
+statistically identical for both classes, so no amount of training can move
+it off chance. RGSN, with no explicit buffer, matches the windowed MLP
+(which is handed the entire sequence at once) almost exactly for delays up
+to about one membrane time constant (tau_mem=20 steps here), then degrades
+and becomes unreliable (high seed-to-seed variance) beyond ~2 tau — a
+believable capacity limit of passive leaky-membrane memory, not a training
+failure. This is a genuine structural capability gap: RGSN has a real,
+non-tunable source of memory that a stateless feedforward net cannot have
+regardless of training, in the specific (but common) setting of bounded
+per-step online processing without an external history buffer.
 
 ## Scope and deviations from PLAN.md
 
@@ -105,12 +202,16 @@ diverging:
   4000 (not the full 60k) and 3 seeds (not 5). The simulator itself is
   validated at the plan's target scale (N=1000, T=100, batch=64) in
   `tests/test_network.py::test_forward_pass_speed_batch64_n1000_t100`.
-- **H4 (temporal, SHD) and Phase 8 (stretch) are not implemented**: no
-  `tonic`/SHD dependency, no synaptic delays, no local learning rules
-  (e-prop / reward-modulated STDP), no topology analysis. The architecture
-  (`encoding.py`'s `passthrough_encode`, `RandomGraphSNN`'s discrete-time
-  interface) is built to make adding an event-based temporal dataset a
-  matter of writing a loader, not a redesign.
+- **H4 was tested with a custom synthetic task, not SHD**: no
+  `tonic`/SHD dependency was added; instead `rgsn.delayed_recall` implements
+  a small online delayed-recall task purpose-built to isolate a temporal-
+  memory capability gap (see Results). The architecture (`encoding.py`'s
+  `passthrough_encode`, `RandomGraphSNN`'s discrete-time interface) is built
+  to make adding a real event-based dataset like SHD a matter of writing a
+  loader, not a redesign.
+- **Phase 8 stretch goals are not implemented**: no synaptic delays, no
+  local learning rules (e-prop / reward-modulated STDP), no topology
+  analysis.
 - **RigL regrowth** (`rewiring.regrow_rigl`) is implemented but not wired
   into the training loop or exercised by the experiments; only DEEP-R
   (uniform random regrowth) is used.
