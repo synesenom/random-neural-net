@@ -1,0 +1,54 @@
+name: rgsn_mnist
+model: rgsn
+dataset: mnist
+device: cpu
+
+graph:
+  n: 300
+  p: 0.08
+  graph_type: erdos_renyi
+  input_fraction: 0.2
+  output_group_size: 8
+  n_classes: 10
+  dales_law: false
+  gain: 4.0
+
+neuron:
+  tau_mem_ms: 20.0
+  dt_ms: 1.0
+  v_th: 1.0
+  surrogate_slope: 1.0
+  refractory_steps: 0
+
+encoding:
+  scheme: poisson
+  t_steps: 30
+  max_rate_hz: 100.0
+  dt_ms: 1.0
+
+decoding:
+  scheme: population_rate
+  temperature: 1.0
+  learnable_temperature: true
+
+rewiring:
+  enabled: true
+  strategy: deep_r
+  interval_steps: 1
+  init_weight_scale: 0.02
+  l1_weight: 0.0005
+
+train:
+  epochs: 15
+  batch_size: 64
+  lr: 0.01
+  optimizer: adam
+  rate_reg_weight: 0.001
+  rate_reg_target_low: 5.0
+  rate_reg_target_high: 20.0
+  train_input_weights: true
+  seed: 0
+  n_train_samples: 2000
+  n_test_samples: 1000
+  mlp_param_budget: 50000
+  grad_clip_norm: 5.0
