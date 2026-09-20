@@ -55,6 +55,7 @@ python experiments/run_sample_efficiency.py    # H1 + H2 data
 python experiments/run_ablation.py             # H3 data (needs H1's checkpoints first)
 python experiments/run_delayed_recall.py       # delayed-recall / H4 data (independent of the above)
 python experiments/run_shrink_delayed_recall.py  # network-size sweep at delay=20 (needs run_delayed_recall's finding as context, not its output)
+python experiments/run_delayed_recall_rewiring.py  # does DEEP-R rewiring help delayed-recall memory?
 python experiments/make_plots.py               # renders runs/plots/*.png from the CSVs
 ```
 
@@ -212,6 +213,43 @@ genuine structural capability gap either way: RGSN has a real,
 non-tunable source of memory that a stateless feedforward net cannot have
 regardless of training, in the specific (but common) setting of bounded
 per-step online processing without an external history buffer.
+
+### Does DEEP-R rewiring help memory?
+
+All the delayed-recall results above used a static topology. Does adding
+structural plasticity back in help, especially at the long delays where the
+static network struggles? Full {no rewiring, DEEP-R rewiring} x
+{population-rate, linear readout} factorial, 3 seeds, delays 0/20/40/80:
+
+| Delay | Population, static | Population, rewired | Linear, static | Linear, rewired |
+|---|---|---|---|---|
+| 0 | 97.3% | 97.3% | 96.8% | 96.7% |
+| 20 | 96.0% | 96.5% | 97.6% | 96.2% |
+| 40 | 65.9% (+/-24%) | 68.0% (+/-25%) | **96.1% (+/-1.2%)** | 95.5% (+/-1.9%) |
+| 80 | 59.7% (+/-16%) | 69.7% (+/-16%) | **78.7% (+/-1.7%)** | 74.5% (+/-8.5%) |
+
+Under the linear readout — which isolates the recurrent dynamics' actual
+memory capacity from the readout bottleneck identified above — **rewiring
+does not help, and its variance roughly quintuples at delay=80** (one
+rewired seed dropped to 64.8% against a tight 77-81% band without
+rewiring). The mean bump under the population-rate readout doesn't
+survive inspection either: rewiring didn't rescue the seeds that failed
+without it — it just changed *which* seed failed (delay=80, static:
+78%/49%/52%; rewired: 51%/77%/81%). That's consistent with reshuffling
+which random run gets lucky, not a real fix.
+
+A plausible mechanism: DEEP-R's continuous prune/regrow churned roughly
+1,300-5,300 edges over training against only ~2,260 total active edges —
+most of the graph got rewritten at least once. That kind of continual
+structural search is a reasonable regularizer for a static-input
+classification task (where it was roughly neutral on MNIST too, see H1),
+but for a task that depends on a *stable, long-duration reverberating
+loop*, churning the very connections that loop runs on works against it.
+**This is a genuine negative result**: in this setup, structural
+plasticity does not improve — and mildly destabilizes — long-horizon
+working memory, even though it isolates a real, interesting question
+(whether sparse dynamic-topology training helps or hurts task-relevant
+attractor dynamics) that a larger, more careful study could pursue further.
 
 ### Shrinking the network
 

@@ -166,6 +166,43 @@ def plot_delayed_recall(recall_csv: Path, out_dir: Path):
     plt.close(fig)
 
 
+def plot_rewiring_memory(csv_path: Path, out_dir: Path):
+    df = pd.read_csv(csv_path)
+    agg = (
+        df.groupby(["decoder", "rewiring", "delay"])["test_acc"].agg(["mean", "std"]).reset_index()
+    )
+    decoder_titles = {
+        "population_rate": "Population-rate readout",
+        "linear_readout": "Trained linear readout (isolates memory capacity)",
+    }
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5), sharey=True)
+    for ax, decoder in zip(axes, ["population_rate", "linear_readout"], strict=True):
+        for rewiring, color, label in [
+            (False, "#1b9e77", "No rewiring"),
+            (True, "#d95f02", "DEEP-R rewiring"),
+        ]:
+            sub = agg[(agg.decoder == decoder) & (agg.rewiring == rewiring)].sort_values("delay")
+            ax.errorbar(
+                sub.delay,
+                sub["mean"],
+                yerr=sub["std"].fillna(0),
+                marker="o",
+                color=color,
+                label=label,
+            )
+        ax.axhline(0.5, color="gray", linestyle=":", linewidth=1)
+        ax.set_xlabel("Delay (timesteps)")
+        ax.set_title(decoder_titles[decoder])
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+    axes[0].set_ylabel("Test accuracy")
+    axes[0].set_ylim(0.4, 1.02)
+    fig.suptitle("Does DEEP-R rewiring improve delayed-recall memory?")
+    fig.tight_layout()
+    fig.savefig(out_dir / "delayed_recall_rewiring.png", dpi=150)
+    plt.close(fig)
+
+
 def plot_shrink(shrink_csv: Path, out_dir: Path):
     df = pd.read_csv(shrink_csv)
     rgsn = df[df.model == "rgsn"]
@@ -226,6 +263,7 @@ def main():
     parser.add_argument("--h3-csv", default="runs/h3_ablation/summary.csv")
     parser.add_argument("--recall-csv", default="runs/delayed_recall/summary.csv")
     parser.add_argument("--shrink-csv", default="runs/shrink_delayed_recall/summary.csv")
+    parser.add_argument("--rewiring-memory-csv", default="runs/delayed_recall_rewiring/summary.csv")
     parser.add_argument("--out-dir", default="runs/plots")
     parser.add_argument("--learning-speed-n", type=int, default=4000)
     parser.add_argument("--learning-speed-seed", type=int, default=0)
@@ -251,6 +289,10 @@ def main():
     shrink_csv = Path(args.shrink_csv)
     if shrink_csv.exists():
         plot_shrink(shrink_csv, out_dir)
+
+    rewiring_memory_csv = Path(args.rewiring_memory_csv)
+    if rewiring_memory_csv.exists():
+        plot_rewiring_memory(rewiring_memory_csv, out_dir)
 
     print(f"Plots written to {out_dir}")
 
