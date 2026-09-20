@@ -252,10 +252,21 @@ def load_model(run_dir: Path) -> tuple[Model, RunConfig]:
     from rgsn.utils import dataclass_from_dict
 
     raw = load_yaml(run_dir / "config.yaml")
+    ckpt = torch.load(run_dir / "checkpoint.pt", weights_only=True)
+
+    if raw["model"] != "mlp":
+        # The saved config's decoding.scheme is not authoritative: it just
+        # records whatever the base config said at construction time, which
+        # can disagree with which decoder was actually built and trained
+        # (e.g. runs from before decoder choice was decoupled from model
+        # kind). The checkpoint's own state dict keys are ground truth.
+        decoder_keys = set(ckpt["state"]["decoder"].keys())
+        actual_scheme = "linear_readout" if "linear.weight" in decoder_keys else "population_rate"
+        raw = {**raw, "decoding": {**raw["decoding"], "scheme": actual_scheme}}
+
     cfg = dataclass_from_dict(RunConfig, raw)
     gen = seed_everything(cfg.train.seed)
     model = Model(cfg, gen)
-    ckpt = torch.load(run_dir / "checkpoint.pt", weights_only=True)
     if model.mlp is not None:
         model.mlp.load_state_dict(ckpt["state"])
     else:
